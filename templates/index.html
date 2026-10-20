@@ -4,130 +4,76 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Veloit Voice RAG — Multilingual Handbook Assistant</title>
-    <meta name="description" content="Ask questions about the Veloit handbook in any European language using voice or text." />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <title>Veloit RAG Chat</title>
     <link rel="stylesheet" href="/static/style.css" />
 </head>
 
 <body>
     <div class="app">
-        <!-- ── Top bar ──────────────────────────────────────────────────── -->
         <header class="topbar">
-            <div class="topbar-left">
-                <div class="logo-mark">V</div>
-                <div>
-                    <h1>Veloit Voice RAG</h1>
-                    <p>Multilingual handbook assistant · speak or type in any European language</p>
-                </div>
+            <div>
+                <h1>Veloit RAG</h1>
+                <p>Simple local chat</p>
             </div>
 
             <div class="topbar-right">
-                <!-- Language selector -->
-                <div class="lang-selector-wrap">
-                    <label for="lang-override" class="sr-only">Response language</label>
-                    <select id="lang-override" title="The bot answers in this language." aria-label="Response language">
-                        <option value="en" selected>English</option>
-                        <option value="de">Deutsch</option>
-                        <option value="fr">Français</option>
-                        <option value="es">Español</option>
-                        <option value="it">Italiano</option>
-                        <option value="nl">Nederlands</option>
-                        <option value="pt">Português</option>
-                        <option value="pl">Polski</option>
-                        <option value="sv">Svenska</option>
-                        <option value="da">Dansk</option>
-                        <option value="fi">Suomi</option>
-                        <option value="nb">Norsk</option>
-                        <option value="cs">Čeština</option>
-                        <option value="sk">Slovenčina</option>
-                        <option value="hu">Magyar</option>
-                        <option value="ro">Română</option>
-                        <option value="bg">Български</option>
-                        <option value="hr">Hrvatski</option>
-                        <option value="el">Ελληνικά</option>
-                        <option value="tr">Türkçe</option>
-                    </select>
-                </div>
-
-                <!-- Session fill ring -->
-                <div class="ring-wrap" title="Session memory usage">
-                    <svg class="ring" width="54" height="54" viewBox="0 0 54 54" aria-hidden="true">
+                <div class="ring-wrap">
+                    <svg class="ring" width="54" height="54" viewBox="0 0 54 54">
                         <circle class="ring-bg" cx="27" cy="27" r="22"></circle>
                         <circle class="ring-progress" id="ring-progress" cx="27" cy="27" r="22"></circle>
                     </svg>
-                    <div class="ring-label" id="ring-label" aria-label="Session fill">0%</div>
+                    <div class="ring-label" id="ring-label">0%</div>
                 </div>
-
-                <div class="status" id="status" role="status" aria-live="polite">Ready</div>
+                <div class="status" id="status">Ready</div>
             </div>
         </header>
 
-        <!-- ── Main layout ──────────────────────────────────────────────── -->
         <main class="layout">
-
-            <!-- ── Chat column ──────────────────────────────────────────── -->
-            <section class="chat-shell" aria-label="Chat">
-
-                <!-- Voice transcript badge (shown after recording) -->
-                <div id="transcript-panel" class="transcript-panel hidden" role="region" aria-label="Voice transcript">
-                    <div class="transcript-header">
-                        <span class="transcript-icon">🎙️</span>
-                        <span class="transcript-label">Transcript</span>
-                        <button id="transcript-dismiss" class="icon-btn" title="Dismiss" aria-label="Dismiss transcript">✕</button>
+            <section class="chat-shell">
+                <div id="voice-bar" class="voice-bar hidden">
+                    <div class="voice-bar-left">
+                        <span class="voice-dot" id="voice-dot"></span>
+                        <span class="voice-state-text" id="voice-state-text">Listening...</span>
                     </div>
-                    <div class="transcript-row">
-                        <span id="transcript-text" class="transcript-text"></span>
+                    <div class="voice-wave" id="voice-wave">
+                        <span></span><span></span><span></span><span></span><span></span>
                     </div>
-                    <div class="transcript-query-row hidden" id="query-row">
-                        <span class="transcript-query-label">English query used for retrieval:</span>
-                        <span id="normalized-query" class="transcript-query-text"></span>
-                    </div>
+                    <button type="button" id="voice-cancel-btn" class="voice-stop-btn">Exit Voice</button>
                 </div>
 
-                <!-- Messages -->
-                <div id="chat" class="chat" role="log" aria-live="polite" aria-label="Chat messages"></div>
+                <div id="chat" class="chat"></div>
 
-                <!-- Input composer -->
-                <form id="chat-form" class="composer" autocomplete="off">
-                    <!-- Mic button -->
-                    <button type="button" id="mic-btn" class="mic-btn" title="Hold to record (click to toggle)" aria-label="Record voice input" aria-pressed="false">
-                        <svg id="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <rect x="9" y="1" width="6" height="12" rx="3"></rect>
-                            <path d="M5 10a7 7 0 0 0 14 0"></path>
+                <form id="chat-form" class="composer">
+                    <input id="message" type="text" placeholder="Ask something..." autocomplete="off" required />
+                    <button type="button" id="voice-toggle-btn" class="mic-btn" title="Toggle Voice Mode" aria-label="Toggle Voice Mode">
+                        <svg class="mic-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
                             <line x1="12" y1="19" x2="12" y2="23"></line>
                             <line x1="8" y1="23" x2="16" y2="23"></line>
                         </svg>
-                        <div class="mic-pulse" id="mic-pulse" aria-hidden="true"></div>
                     </button>
-
-                    <input id="message" type="text" placeholder="Ask something… or click 🎙️ to speak" autocomplete="off" aria-label="Type your question" />
-                    <button type="submit" id="send-btn" aria-label="Send">Send</button>
-                    <button type="button" id="reset-btn" class="ghost-btn" aria-label="Reset session">Reset</button>
+                    <button type="submit">Send</button>
+                    <button type="button" id="reset-btn" class="ghost-btn">Reset</button>
                 </form>
             </section>
 
-            <!-- ── Debug panel ──────────────────────────────────────────── -->
-            <aside class="debug-panel" aria-label="Debug information">
+            <aside class="debug-panel">
                 <div class="debug-header">
                     <h2>Debug</h2>
                     <label class="toggle">
-                        <input type="checkbox" id="debug-toggle" checked aria-label="Enable debug mode" />
+                        <input type="checkbox" id="debug-toggle" checked />
                         <span>On</span>
                     </label>
                 </div>
 
                 <div class="debug-block">
                     <div class="debug-kv"><span>Status</span><span id="dbg-status">Idle</span></div>
-                    <div class="debug-kv"><span>Language</span><span id="dbg-lang">–</span></div>
-                    <div class="debug-kv"><span>Normalized query</span><span id="dbg-query" class="dbg-query-val">–</span></div>
-                    <div class="debug-kv"><span>Top score</span><span id="dbg-score">–</span></div>
-                    <div class="debug-kv"><span>Chunks</span><span id="dbg-chunks">–</span></div>
-                    <div class="debug-kv"><span>History msgs</span><span id="dbg-history">–</span></div>
-                    <div class="debug-kv"><span>Context chars</span><span id="dbg-context">–</span></div>
-                    <div class="debug-kv"><span>Session chars</span><span id="dbg-session">–</span></div>
+                    <div class="debug-kv"><span>Top score</span><span id="dbg-score">-</span></div>
+                    <div class="debug-kv"><span>Chunks</span><span id="dbg-chunks">-</span></div>
+                    <div class="debug-kv"><span>History msgs</span><span id="dbg-history">-</span></div>
+                    <div class="debug-kv"><span>Context chars</span><span id="dbg-context">-</span></div>
+                    <div class="debug-kv"><span>Session chars</span><span id="dbg-session">-</span></div>
                 </div>
 
                 <div class="debug-block">
@@ -141,7 +87,6 @@
                 </div>
             </aside>
         </main>
-        <div id="tts-notice" class="tts-notice hidden" role="status" aria-live="polite"></div>
     </div>
 
     <script src="/static/app.js"></script>

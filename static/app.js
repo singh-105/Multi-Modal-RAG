@@ -1,796 +1,722 @@
-/**
- * app.js — Veloit Voice RAG frontend
- *
- * Two input paths:
- *   TEXT:  user types → POST /ask
- *   VOICE: user clicks mic → MediaRecorder → POST /voice-ask → renders result
- *
- * Language is chosen strictly via the response language dropdown (default: "en").
- * Answers are recited only manually via the "Recite" button in the response's language.
- */
+const form = document.getElementById("chat-form");
+const input = document.getElementById("message");
+const chat = document.getElementById("chat");
+const statusEl = document.getElementById("status");
+const resetBtn = document.getElementById("reset-btn");
+const debugToggle = document.getElementById("debug-toggle");
 
-// ---------------------------------------------------------------------------
-// DOM refs
-// ---------------------------------------------------------------------------
-const form           = document.getElementById("chat-form");
-const input          = document.getElementById("message");
-const chat           = document.getElementById("chat");
-const statusEl       = document.getElementById("status");
-const resetBtn       = document.getElementById("reset-btn");
-const debugToggle    = document.getElementById("debug-toggle");
-const micBtn         = document.getElementById("mic-btn");
-const micPulse       = document.getElementById("mic-pulse");
-const langOverride   = document.getElementById("lang-override");
-
-// Transcript panel
-const transcriptPanel   = document.getElementById("transcript-panel");
-const transcriptText    = document.getElementById("transcript-text");
-const transcriptDismiss = document.getElementById("transcript-dismiss");
-const queryRow          = document.getElementById("query-row");
-const normalizedQuery   = document.getElementById("normalized-query");
-
-// Debug panel
-const dbgStatus   = document.getElementById("dbg-status");
-const dbgLang     = document.getElementById("dbg-lang");
-const dbgQuery    = document.getElementById("dbg-query");
-const dbgScore    = document.getElementById("dbg-score");
-const dbgChunks   = document.getElementById("dbg-chunks");
-const dbgHistory  = document.getElementById("dbg-history");
-const dbgContext  = document.getElementById("dbg-context");
-const dbgSession  = document.getElementById("dbg-session");
-const debugChunksEl  = document.getElementById("debug-chunks");
+const dbgStatus = document.getElementById("dbg-status");
+const dbgScore = document.getElementById("dbg-score");
+const dbgChunks = document.getElementById("dbg-chunks");
+const dbgHistory = document.getElementById("dbg-history");
+const dbgContext = document.getElementById("dbg-context");
+const dbgSession = document.getElementById("dbg-session");
+const debugChunksEl = document.getElementById("debug-chunks");
 const debugContextEl = document.getElementById("debug-context");
 
-// Non-blocking TTS notice toast
-const ttsNoticeEl = document.getElementById("tts-notice");
-
-// Ring
 const ringProgress = document.getElementById("ring-progress");
-const ringLabel    = document.getElementById("ring-label");
+const ringLabel = document.getElementById("ring-label");
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-const SESSION_ID   = "default";
-const RADIUS       = 22;
+// Voice Elements
+const voiceToggleBtn = document.getElementById("voice-toggle-btn");
+const voiceBtnLabel = document.getElementById("voice-btn-label");
+const voiceBar = document.getElementById("voice-bar");
+const voiceDot = document.getElementById("voice-dot");
+const voiceStateText = document.getElementById("voice-state-text");
+const voiceWave = document.getElementById("voice-wave");
+const voiceCancelBtn = document.getElementById("voice-cancel-btn");
+
+const sessionId = "default";
+const RADIUS = 22;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-ringProgress.style.strokeDasharray  = `${CIRCUMFERENCE}`;
+ringProgress.style.strokeDasharray = `${CIRCUMFERENCE}`;
 ringProgress.style.strokeDashoffset = `${CIRCUMFERENCE}`;
 
-// Language code → display name
-const LANG_NAMES = {
-  en: "English", de: "Deutsch", fr: "Français", es: "Español",
-  it: "Italiano", nl: "Nederlands", pt: "Português", pl: "Polski",
-  sv: "Svenska",  da: "Dansk",    fi: "Suomi",    nb: "Norsk",
-  cs: "Čeština",  sk: "Slovenčina", hu: "Magyar", ro: "Română",
-  bg: "Български", hr: "Hrvatski", el: "Ελληνικά", tr: "Türkçe",
-};
-
-// Language code → BCP-47 locale tag for TTS
-const BCP47_MAP = {
-  en: "en-US", de: "de-DE", fr: "fr-FR", es: "es-ES",
-  it: "it-IT", pt: "pt-PT", nl: "nl-NL", pl: "pl-PL",
-  sv: "sv-SE", da: "da-DK", fi: "fi-FI", nb: "nb-NO",
-  cs: "cs-CZ", sk: "sk-SK", hu: "hu-HU", ro: "ro-RO",
-  bg: "bg-BG", hr: "hr-HR", el: "el-GR", tr: "tr-TR",
-};
-
-// ---------------------------------------------------------------------------
-// Text-to-Speech (Web Speech API)
-// ---------------------------------------------------------------------------
-let ttsSupported = false;
-let cachedVoices = [];
-let activeSpeakingMsgId = null;
-let currentSpeakId = 0;
-let resumeIntervalId = null;
-let ttsNoticeTimer = null;
-
-function showTTSNotice(msg) {
-  if (!ttsNoticeEl) return;
-  ttsNoticeEl.textContent = msg;
-  ttsNoticeEl.classList.remove("hidden");
-  ttsNoticeEl.classList.add("visible");
-  if (ttsNoticeTimer) clearTimeout(ttsNoticeTimer);
-  ttsNoticeTimer = setTimeout(() => {
-    ttsNoticeEl.classList.remove("visible");
-    ttsNoticeEl.classList.add("hidden");
-  }, 4000);
-}
-
-function loadVoices() {
-  if (typeof window !== "undefined" && "speechSynthesis" in window) {
-    cachedVoices = window.speechSynthesis.getVoices() || [];
-  }
-}
-
-function initTTS() {
-  if (typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
-    ttsSupported = true;
-    loadVoices();
-    if (window.speechSynthesis.onvoiceschanged !== undefined) {
-      window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
-    }
-  } else {
-    ttsSupported = false;
-  }
-}
-
-function findVoiceForLanguage(langCode) {
-  if (!ttsSupported) return null;
-  const voices = cachedVoices.length ? cachedVoices : (window.speechSynthesis.getVoices() || []);
-  if (!voices.length) return null;
-
-  const targetBcp = (BCP47_MAP[langCode] || langCode || "en-US").toLowerCase();
-  const targetPrefix = (langCode || "en").toLowerCase();
-
-  // 1. Exact match with localService
-  let match = voices.find(v => v.lang && v.lang.toLowerCase() === targetBcp && v.localService);
-  if (match) return match;
-
-  // 2. Exact match any service
-  match = voices.find(v => v.lang && v.lang.toLowerCase() === targetBcp);
-  if (match) return match;
-
-  // 3. Prefix match with localService
-  match = voices.find(v => v.lang && (v.lang.toLowerCase().startsWith(targetPrefix + "-") || v.lang.toLowerCase() === targetPrefix) && v.localService);
-  if (match) return match;
-
-  // 4. Prefix match any service
-  match = voices.find(v => v.lang && (v.lang.toLowerCase().startsWith(targetPrefix + "-") || v.lang.toLowerCase() === targetPrefix));
-  return match || null;
-}
-
-function cleanTextForSpeech(text) {
-  if (!text) return "";
-  let clean = text;
-  // Remove "Sources" lines and everything after them
-  clean = clean.replace(/\n*Sources:[\s\S]*$/i, "");
-  clean = clean.replace(/\bSources:.*$/im, "");
-  // Remove markdown links [text](url) -> text
-  clean = clean.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
-  // Remove citation brackets like [1], [2], [1, 2]
-  clean = clean.replace(/\[(?:\d+(?:,\s*\d+)*|[A-Za-z0-9\s._-]+)\]/g, "");
-  // Remove URLs
-  clean = clean.replace(/https?:\/\/\S+/gi, "");
-  // Remove markdown symbols
-  clean = clean.replace(/[*_~`#>-]/g, " ");
-  // Remove emojis and symbols
-  clean = clean.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "");
-  // Normalize whitespace
-  clean = clean.replace(/\s+/g, " ").trim();
-  return clean;
-}
-
-function splitIntoSentences(text, maxLen = 200) {
-  if (!text) return [];
-  const matches = text.match(/[^.!?\n]+[.!?\n]*/g) || [text];
-  const result = [];
-  for (let seg of matches) {
-    seg = seg.trim();
-    if (!seg) continue;
-    if (seg.length <= maxLen) {
-      result.push(seg);
-    } else {
-      const words = seg.split(" ");
-      let cur = "";
-      for (let w of words) {
-        if ((cur + " " + w).trim().length <= maxLen) {
-          cur = (cur + " " + w).trim();
-        } else {
-          if (cur) result.push(cur);
-          cur = w;
-        }
-      }
-      if (cur) result.push(cur);
-    }
-  }
-  return result;
-}
-
-function updateTTSButtons() {
-  const buttons = document.querySelectorAll(".recite-btn");
-  buttons.forEach((btn) => {
-    const id = btn.getAttribute("data-msg-id");
-    const isCurrent = (activeSpeakingMsgId !== null && activeSpeakingMsgId === id);
-    if (isCurrent) {
-      btn.classList.add("speaking");
-      btn.setAttribute("aria-label", "Stop");
-      btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Stop`;
-    } else {
-      btn.classList.remove("speaking");
-      btn.setAttribute("aria-label", "Recite answer aloud");
-      btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg> Recite`;
-    }
-  });
-}
-
-function startResumeHeartbeat() {
-  stopResumeHeartbeat();
-  resumeIntervalId = setInterval(() => {
-    if (typeof window !== "undefined" && window.speechSynthesis && window.speechSynthesis.speaking) {
-      window.speechSynthesis.resume();
-    }
-  }, 10000);
-}
-
-function stopResumeHeartbeat() {
-  if (resumeIntervalId) {
-    clearInterval(resumeIntervalId);
-    resumeIntervalId = null;
-  }
-}
-
-function stopSpeaking() {
-  currentSpeakId++;
-  stopResumeHeartbeat();
-  if (ttsSupported && window.speechSynthesis) {
-    window.speechSynthesis.cancel();
-  }
-  if (activeSpeakingMsgId !== null) {
-    activeSpeakingMsgId = null;
-    updateTTSButtons();
-  }
-}
-
-function speak(text, langCode = "en", msgId = null, isRetry = false) {
-  if (!ttsSupported || !window.speechSynthesis) return;
-
-  // Ensure voices are loaded
-  loadVoices();
-  if (cachedVoices.length === 0 && !isRetry) {
-    // Retry once after 250 ms if cached list is empty
-    setTimeout(() => {
-      loadVoices();
-      speak(text, langCode, msgId, true);
-    }, 250);
-    return;
-  }
-
-  // Cancel any ongoing speech
-  stopSpeaking();
-
-  const cleaned = cleanTextForSpeech(text);
-  if (!cleaned) return;
-
-  const chunks = splitIntoSentences(cleaned, 200);
-  if (!chunks.length) return;
-
-  activeSpeakingMsgId = msgId;
-  updateTTSButtons();
-
-  const speakId = ++currentSpeakId;
-  const bcpTag = BCP47_MAP[langCode] || langCode || "en-US";
-  const voice = findVoiceForLanguage(langCode);
-
-  if (!voice) {
-    console.warn(`[TTS] No matching voice found for language '${langCode}' (${bcpTag}). Letting browser pick voice.`);
-    if (cachedVoices.length === 0) {
-      const langName = LANG_NAMES[langCode] || langCode.toUpperCase();
-      showTTSNotice(`No ${langName} voice installed on this device.`);
-      activeSpeakingMsgId = null;
-      updateTTSButtons();
-      return;
-    }
-  }
-
-  // Chrome can drop utterances queued in same tick as cancel(); wait 80ms
-  setTimeout(() => {
-    if (speakId !== currentSpeakId) return;
-
-    startResumeHeartbeat();
-
-    chunks.forEach((chunk, idx) => {
-      const utter = new SpeechSynthesisUtterance(chunk);
-      if (voice) {
-        utter.voice = voice;
-        utter.lang = voice.lang || bcpTag;
-      } else {
-        utter.lang = bcpTag;
-      }
-      utter.rate = 1.0;
-      utter.pitch = 1.0;
-
-      if (idx === chunks.length - 1) {
-        utter.onend = () => {
-          if (speakId === currentSpeakId) {
-            stopResumeHeartbeat();
-            activeSpeakingMsgId = null;
-            updateTTSButtons();
-          }
-        };
-      }
-
-      utter.onerror = (e) => {
-        if (e.error !== "canceled" && e.error !== "interrupted") {
-          console.warn("[TTS] Utterance error:", e.error, e);
-          const langName = LANG_NAMES[langCode] || langCode.toUpperCase();
-          showTTSNotice(`No ${langName} voice installed on this device.`);
-        }
-        if (speakId === currentSpeakId) {
-          stopResumeHeartbeat();
-          activeSpeakingMsgId = null;
-          updateTTSButtons();
-        }
-      };
-
-      window.speechSynthesis.speak(utter);
-    });
-  }, 80);
-}
-
-window.addEventListener("beforeunload", () => {
-  stopSpeaking();
-});
-
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
 function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
 }
 
-function setStatus(msg) {
-  statusEl.textContent = msg;
+function addMessage(text, role, sources = []) {
+    const wrap = document.createElement("div");
+    wrap.className = `message ${role}`;
+
+    const textEl = document.createElement("div");
+    textEl.textContent = text;
+    wrap.appendChild(textEl);
+
+    if (role === "bot" && sources.length) {
+        const seen = new Set();
+        const uniqueSources = [];
+        for (const s of sources) {
+            const title = s.section_title || "Unknown";
+            const file = s.source_file || "n/a";
+            const key = `${title}::${file}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueSources.push(s);
+            }
+        }
+
+        if (uniqueSources.length > 0) {
+            const meta = document.createElement("div");
+            meta.className = "sources";
+            meta.textContent = "Sources: " + uniqueSources
+                .map(s => `${s.section_title || "Unknown"} (${s.source_file || "n/a"})`)
+                .join(" • ");
+            wrap.appendChild(meta);
+        }
+    }
+
+    chat.appendChild(wrap);
+    chat.scrollTop = chat.scrollHeight;
 }
 
-function setInputsDisabled(disabled) {
-  input.disabled  = disabled;
-  micBtn.disabled = disabled;
-  form.querySelector("[type='submit']").disabled = disabled;
-}
-
-// ---------------------------------------------------------------------------
-// Ring indicator
-// ---------------------------------------------------------------------------
 function setRing(fillRatio) {
-  const ratio  = Math.max(0, Math.min(fillRatio || 0, 1));
-  const offset = CIRCUMFERENCE * (1 - ratio);
-  ringProgress.style.strokeDashoffset = `${offset}`;
-  ringLabel.textContent = `${Math.round(ratio * 100)}%`;
-  ringProgress.style.stroke =
-    ratio < 0.5 ? "#22c55e" : ratio < 0.8 ? "#eab308" : "#ef4444";
-}
+    const ratio = Math.max(0, Math.min(fillRatio || 0, 1));
+    const offset = CIRCUMFERENCE * (1 - ratio);
+    ringProgress.style.strokeDashoffset = `${offset}`;
+    ringLabel.textContent = `${Math.round(ratio * 100)}%`;
 
-// ---------------------------------------------------------------------------
-// Chat messages
-// ---------------------------------------------------------------------------
-function addMessage(text, role, sources = [], meta = {}) {
-  const msgId = "msg-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
-  const wrap = document.createElement("div");
-  wrap.className = `message ${role}`;
-  wrap.setAttribute("data-msg-id", msgId);
-  wrap.setAttribute("data-lang", meta.language || "en");
-
-  if (role === "voice") {
-    wrap.className = "message user voice-msg";
-  }
-
-  const textEl = document.createElement("div");
-  textEl.className = "message-text";
-  textEl.textContent = text;
-  wrap.appendChild(textEl);
-
-  // Recite button for bot messages
-  if ((role === "bot" || role === "voice-bot") && ttsSupported) {
-    const actionsRow = document.createElement("div");
-    actionsRow.className = "msg-actions-row";
-
-    const reciteBtn = document.createElement("button");
-    reciteBtn.type = "button";
-    reciteBtn.className = "tts-btn recite-btn";
-    reciteBtn.setAttribute("data-msg-id", msgId);
-    reciteBtn.setAttribute("aria-label", "Recite answer aloud");
-    reciteBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg> Recite`;
-
-    reciteBtn.addEventListener("click", () => {
-      if (activeSpeakingMsgId === msgId) {
-        stopSpeaking();
-      } else {
-        const msgLang = wrap.getAttribute("data-lang") || "en";
-        speak(text, msgLang, msgId);
-      }
-    });
-
-    actionsRow.appendChild(reciteBtn);
-    wrap.appendChild(actionsRow);
-  }
-
-  if ((role === "bot" || role === "voice-bot") && sources.length) {
-    const srcEl = document.createElement("div");
-    srcEl.className = "sources";
-    srcEl.textContent = "Sources: " + sources
-      .filter(s => s.score >= 0.42)
-      .map(s => `${s.section_title || "Unknown"} [${s.score}]`)
-      .join(" · ");
-    wrap.appendChild(srcEl);
-  }
-
-  chat.appendChild(wrap);
-  chat.scrollTop = chat.scrollHeight;
-  return wrap;
-}
-
-// Typing indicator
-function addTypingIndicator() {
-  const wrap = document.createElement("div");
-  wrap.className = "message bot typing-msg";
-  wrap.id = "typing-indicator";
-  wrap.innerHTML = `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
-  chat.appendChild(wrap);
-  chat.scrollTop = chat.scrollHeight;
-  return wrap;
-}
-
-function removeTypingIndicator() {
-  const el = document.getElementById("typing-indicator");
-  if (el) el.remove();
-}
-
-// ---------------------------------------------------------------------------
-// Debug panel
-// ---------------------------------------------------------------------------
-function renderDebug(data) {
-  const meta  = data.meta  || {};
-  const debug = data.debug || {};
-
-  dbgStatus.textContent = "Last response";
-  dbgLang.textContent   = data.language
-    ? `${data.language} (${LANG_NAMES[data.language] || "?"})` : "–";
-  dbgQuery.textContent  = data.normalized_query_en || "–";
-  dbgScore.textContent  = meta.top_score   ?? "–";
-  dbgChunks.textContent = meta.retrieved_chunks ?? "–";
-  dbgHistory.textContent = meta.history_messages ?? "–";
-  dbgContext.textContent = meta.context_chars_used && meta.context_char_limit
-    ? `${meta.context_chars_used} / ${meta.context_char_limit}` : "–";
-  dbgSession.textContent = meta.session_chars && meta.session_char_limit
-    ? `${meta.session_chars} / ${meta.session_char_limit}` : "–";
-
-  setRing(meta.session_fill_ratio || 0);
-
-  const chunks = debug.retrieved_chunks || [];
-  debugChunksEl.innerHTML = chunks.length
-    ? chunks.map(c => `
-        <div class="debug-item">
-          <div class="debug-item-top">
-            <strong>${escapeHtml(c.section_title || "Unknown")}</strong>
-            <span class="score-pill">${c.score ?? "–"}</span>
-          </div>
-          <div class="debug-item-meta">${escapeHtml(c.source_file || "n/a")}</div>
-          <div class="debug-item-preview">${escapeHtml(c.preview || "")}</div>
-        </div>`).join("")
-    : `<div class="debug-empty">Debug disabled or no chunks.</div>`;
-
-  debugContextEl.textContent = debug.context_preview || "Debug disabled.";
-}
-
-// ---------------------------------------------------------------------------
-// Transcript panel
-// ---------------------------------------------------------------------------
-function showTranscript(data) {
-  transcriptText.textContent = data.transcript || "";
-
-  if (data.normalized_query_en && data.normalized_query_en !== data.transcript) {
-    normalizedQuery.textContent = data.normalized_query_en;
-    queryRow.classList.remove("hidden");
-  } else {
-    queryRow.classList.add("hidden");
-  }
-
-  transcriptPanel.classList.remove("hidden");
-  transcriptPanel.classList.add("slide-in");
-}
-
-transcriptDismiss.addEventListener("click", () => {
-  transcriptPanel.classList.add("hidden");
-  transcriptPanel.classList.remove("slide-in");
-});
-
-// ---------------------------------------------------------------------------
-// Shared response renderer
-// ---------------------------------------------------------------------------
-function renderResponse(data, userText) {
-  removeTypingIndicator();
-
-  const meta = {
-    language: data.language,
-  };
-
-  addMessage(data.answer || "No answer returned.", "bot", data.sources || [], meta);
-  renderDebug(data);
-}
-
-// ---------------------------------------------------------------------------
-// TEXT submit flow
-// ---------------------------------------------------------------------------
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (isProcessing || isRecording) return;
-  const message = input.value.trim();
-  if (!message) return;
-
-  stopSpeaking();
-  isProcessing = true;
-  addMessage(message, "user");
-  input.value = "";
-  setInputsDisabled(true);
-  setStatus("Thinking…");
-  dbgStatus.textContent = "Running";
-
-  const typing = addTypingIndicator();
-
-  try {
-    const selectedLang = langOverride.value || "en";
-    const res = await fetch("/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: SESSION_ID,
-        question:   message,
-        debug:      debugToggle.checked,
-        language:   selectedLang,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      removeTypingIndicator();
-      addMessage(data.detail || data.error || "Request failed.", "bot");
+    if (ratio < 0.5) {
+        ringProgress.style.stroke = "#22c55e";
+    } else if (ratio < 0.8) {
+        ringProgress.style.stroke = "#eab308";
     } else {
-      renderResponse(data, message);
+        ringProgress.style.stroke = "#ef4444";
     }
-  } catch (err) {
-    removeTypingIndicator();
-    addMessage("Could not reach backend.", "bot");
-    dbgStatus.textContent = "Error";
-    console.error(err);
-  } finally {
-    isProcessing = false;
-    setInputsDisabled(false);
-    input.focus();
-    setStatus("Ready");
-  }
-});
-
-// ---------------------------------------------------------------------------
-// VOICE recording flow
-// ---------------------------------------------------------------------------
-let mediaRecorder = null;
-let audioChunks   = [];
-let isRecording   = false;
-let isProcessing  = false;
-let micStream     = null;
-
-function cleanupMedia() {
-  if (micStream) {
-    micStream.getTracks().forEach((t) => {
-      try { t.stop(); } catch (_) {}
-    });
-    micStream = null;
-  }
-  mediaRecorder = null;
-  audioChunks = [];
-  isRecording = false;
 }
 
-async function startRecording() {
-  if (isRecording || isProcessing) return;
+function renderDebug(data) {
+    const meta = data.meta || {};
+    const debug = data.debug || {};
 
-  stopSpeaking();
+    dbgStatus.textContent = "Last response";
+    dbgScore.textContent = meta.top_score ?? "-";
+    dbgChunks.textContent = meta.retrieved_chunks ?? "-";
+    dbgHistory.textContent = meta.history_messages ?? "-";
+    dbgContext.textContent = meta.context_chars_used && meta.context_char_limit
+        ? `${meta.context_chars_used} / ${meta.context_char_limit}`
+        : "-";
+    dbgSession.textContent = meta.session_chars && meta.session_char_limit
+        ? `${meta.session_chars} / ${meta.session_char_limit}`
+        : "-";
 
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-  } catch (err) {
-    console.error("Microphone access denied:", err);
-    setStatus("Mic access denied");
-    addMessage("Microphone permission denied. Please allow microphone access in your browser.", "bot");
-    return;
-  }
+    setRing(meta.session_fill_ratio || 0);
 
-  // Guard against race conditions if state changed while awaiting user media
-  if (isRecording || isProcessing) {
-    cleanupMedia();
-    return;
-  }
-
-  audioChunks = [];
-
-  // Prefer webm/opus; fall back to supported browser formats
-  let mimeType = "";
-  if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
-    mimeType = "audio/webm;codecs=opus";
-  } else if (MediaRecorder.isTypeSupported("audio/webm")) {
-    mimeType = "audio/webm";
-  } else if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) {
-    mimeType = "audio/ogg;codecs=opus";
-  } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
-    mimeType = "audio/mp4";
-  }
-
-  try {
-    mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType } : {});
-  } catch (err) {
-    console.error("MediaRecorder initialization error:", err);
-    cleanupMedia();
-    setStatus("Mic error");
-    addMessage("Could not start audio recorder. Please try again.", "bot");
-    return;
-  }
-
-  mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) {
-      audioChunks.push(e.data);
-    }
-  };
-
-  mediaRecorder.onstop = handleRecordingStop;
-  mediaRecorder.onerror = (e) => {
-    console.error("MediaRecorder error:", e);
-    stopRecording();
-  };
-
-  // Start recording without timeslice so the container header and metadata finalize cleanly on stop
-  mediaRecorder.start();
-  isRecording = true;
-
-  micBtn.classList.add("recording");
-  micBtn.setAttribute("aria-pressed", "true");
-  micPulse.classList.add("active");
-  setStatus("Recording… click again to stop");
-}
-
-async function stopRecording() {
-  if (!isRecording || !mediaRecorder) return;
-  isRecording = false;
-
-  micBtn.classList.remove("recording");
-  micBtn.setAttribute("aria-pressed", "false");
-  micPulse.classList.remove("active");
-  setStatus("Finishing recording…");
-
-  try {
-    if (mediaRecorder.state !== "inactive") {
-      mediaRecorder.stop();
-    }
-  } catch (err) {
-    console.error("Error stopping MediaRecorder:", err);
-    cleanupMedia();
-    setStatus("Ready");
-  }
-}
-
-async function handleRecordingStop() {
-  const mime = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
-  const recordedChunks = [...audioChunks];
-
-  // Fully clean up mic stream and recorder references
-  cleanupMedia();
-
-  const blob = new Blob(recordedChunks, { type: mime });
-  console.log(`[Voice] Audio recording finalized: size=${blob.size} bytes, mimeType=${blob.type || mime}`);
-
-  // Reject empty or suspiciously tiny recordings (< 2 KB)
-  if (!blob || blob.size < 2048) {
-    console.warn(`[Voice] Rejected recording: ${blob ? blob.size : 0} bytes is under the 2 KB threshold.`);
-    setStatus("Ready");
-    setInputsDisabled(false);
-    addMessage("Recording was too short or empty. Please speak clearly while recording.", "bot");
-    return;
-  }
-
-  await sendVoiceBlob(blob, mime);
-}
-
-async function sendVoiceBlob(blob, mime = "audio/webm") {
-  if (isProcessing) return;
-  isProcessing = true;
-  setInputsDisabled(true);
-  setStatus("Transcribing & generating answer…");
-  dbgStatus.textContent = "Transcribing + generating…";
-
-  const extension = mime.includes("ogg")
-    ? "recording.ogg"
-    : mime.includes("mp4")
-      ? "recording.mp4"
-      : "recording.webm";
-
-  const selectedLang = langOverride.value || "en";
-  const formData = new FormData();
-  formData.append("audio",      blob,        extension);
-  formData.append("session_id", SESSION_ID);
-  formData.append("debug",      debugToggle.checked ? "true" : "false");
-  formData.append("language",   selectedLang);
-
-  const typing = addTypingIndicator();
-
-  try {
-    const res = await fetch("/voice-ask", {
-      method: "POST",
-      body: formData,
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      removeTypingIndicator();
-      addMessage(data.detail || "Voice request failed.", "bot");
-      setStatus("Error");
-      return;
+    const chunks = debug.retrieved_chunks || [];
+    if (!chunks.length) {
+        debugChunksEl.innerHTML = `<div class="debug-empty">Debug disabled or no chunks returned.</div>`;
+    } else {
+        debugChunksEl.innerHTML = chunks.map(chunk => `
+      <div class="debug-item">
+        <div class="debug-item-top">
+          <strong>${escapeHtml(chunk.section_title || "Unknown")}</strong>
+          <span>${chunk.score ?? "-"}</span>
+        </div>
+        <div class="debug-item-meta">
+          ${escapeHtml(chunk.source_file || "n/a")}
+        </div>
+        <div class="debug-item-preview">
+          ${escapeHtml(chunk.preview || "")}
+        </div>
+      </div>
+    `).join("");
     }
 
-    // Show transcript panel
-    showTranscript(data);
-
-    // Show user bubble with original transcript
-    addMessage(data.transcript, "voice");
-
-    // Show answer
-    renderResponse(data, data.transcript);
-
-  } catch (err) {
-    removeTypingIndicator();
-    addMessage("Could not reach backend.", "bot");
-    dbgStatus.textContent = "Error";
-    console.error("Voice request error:", err);
-  } finally {
-    isProcessing = false;
-    setInputsDisabled(false);
-    input.focus();
-    setStatus("Ready");
-  }
+    debugContextEl.textContent = debug.context_preview || "Debug disabled.";
 }
 
-// Toggle on click
-micBtn.addEventListener("click", () => {
-  if (isProcessing) return;
-  if (isRecording) {
-    stopRecording();
-  } else {
-    startRecording();
-  }
-});
+async function askQuestion(message, signal = null) {
+    statusEl.textContent = "Thinking...";
+    dbgStatus.textContent = "Running";
 
-// ---------------------------------------------------------------------------
-// Reset
-// ---------------------------------------------------------------------------
+    try {
+        const res = await fetch("/ask", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                session_id: sessionId,
+                question: message,
+                debug: debugToggle.checked
+            }),
+            signal: signal || undefined
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            addMessage(data.error || "Request failed.", "bot");
+            return null;
+        } else {
+            addMessage(data.answer || "No answer returned.", "bot", data.sources || []);
+            renderDebug(data);
+            return data;
+        }
+    } catch (err) {
+        if (err.name === "AbortError") {
+            return null;
+        }
+        addMessage("Could not reach backend.", "bot");
+        dbgStatus.textContent = "Error";
+        return null;
+    } finally {
+        statusEl.textContent = "Ready";
+    }
+}
+
 async function resetSession() {
-  stopSpeaking();
-  await fetch("/reset", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: SESSION_ID }),
-  });
+    if (voiceActive) {
+        stopVoiceMode();
+    }
 
-  chat.innerHTML = "";
-  transcriptPanel.classList.add("hidden");
-  debugChunksEl.innerHTML = `<div class="debug-empty">No request yet.</div>`;
-  debugContextEl.textContent = "No request yet.";
-  dbgStatus.textContent   = "Reset";
-  dbgLang.textContent     = "–";
-  dbgQuery.textContent    = "–";
-  dbgScore.textContent    = "–";
-  dbgChunks.textContent   = "–";
-  dbgHistory.textContent  = "–";
-  dbgContext.textContent  = "–";
-  dbgSession.textContent  = "–";
-  setRing(0);
-  setStatus("Ready");
+    await fetch("/reset", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ session_id: sessionId })
+    });
+
+    chat.innerHTML = "";
+    debugChunksEl.innerHTML = `<div class="debug-empty">No request yet.</div>`;
+    debugContextEl.textContent = "No request yet.";
+    dbgStatus.textContent = "Reset";
+    dbgScore.textContent = "-";
+    dbgChunks.textContent = "-";
+    dbgHistory.textContent = "-";
+    dbgContext.textContent = "-";
+    dbgSession.textContent = "-";
+    setRing(0);
+    statusEl.textContent = "Ready";
 }
+
+form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const message = input.value.trim();
+    if (!message) return;
+
+    cleanupAudio();
+    if (voiceActive) {
+        setVoiceState(VoiceState.LISTENING);
+    }
+
+    addMessage(message, "user");
+    input.value = "";
+    input.disabled = true;
+
+    try {
+        await askQuestion(message);
+    } finally {
+        input.disabled = false;
+        input.focus();
+    }
+});
 
 resetBtn.addEventListener("click", resetSession);
 
-// ---------------------------------------------------------------------------
-// Init
-// ---------------------------------------------------------------------------
+// ==========================================
+// --- Voice Assistant State & Audio Logic ---
+// ==========================================
+
+const VoiceState = {
+    IDLE: "idle",
+    LISTENING: "listening",
+    TRANSCRIBING: "transcribing",
+    THINKING: "thinking",
+    SPEAKING: "speaking"
+};
+
+let currentVoiceState = VoiceState.IDLE;
+let voiceActive = false;
+let sessionGeneration = 0;
+let currentAbortController = null;
+
+let mediaStream = null;
+let audioContext = null;
+let processorNode = null;
+let muteGain = null;
+let currentAudio = null;
+let currentAudioUrl = null;
+
+let recordedChunks = [];
+let hasSpoken = false;
+let silenceStart = null;
+const PRE_SPEECH_CHUNKS_LIMIT = 4; // ~350-500ms pre-speech ring buffer
+const SPEECH_THRESHOLD = 0.015;
+const SILENCE_TIMEOUT_MS = 1200;
+const MAX_RECORDING_MS = 30000;
+let recordingStartTime = 0;
+
+function cleanupAudio() {
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.onended = null;
+        currentAudio.onerror = null;
+        currentAudio = null;
+    }
+    if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = null;
+    }
+}
+
+function cleanTextForSpeech(text) {
+    if (!text) return "";
+    let cleaned = text.replace(/\[\d+\]\s*(section|subsection|file)\s*=[^\n]+/gi, "");
+    cleaned = cleaned.replace(/\[\d+\]/g, "");
+    cleaned = cleaned.replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1");
+    cleaned = cleaned.replace(/[*#_`>~]/g, "");
+    cleaned = cleaned.replace(/\s+([.,!?])/g, "$1");
+    cleaned = cleaned.replace(/\s+/g, " ").trim();
+    return cleaned;
+}
+
+function splitIntoSentenceChunks(text, minChunkLen = 45, maxChunkLen = 160) {
+    const cleaned = cleanTextForSpeech(text);
+    if (!cleaned) return [];
+    if (cleaned.length <= 140) return [cleaned];
+
+    const rawSentences = cleaned
+        .split(/(?<=[.!?])\s+/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+
+    if (rawSentences.length <= 1) return [cleaned];
+
+    const chunks = [];
+    let current = "";
+    for (const s of rawSentences) {
+        if (!current) {
+            current = s;
+        } else if (current.length < minChunkLen) {
+            current += " " + s;
+        } else if (current.length + s.length + 1 <= maxChunkLen) {
+            current += " " + s;
+        } else {
+            chunks.push(current);
+            current = s;
+        }
+    }
+    if (current) {
+        chunks.push(current);
+    }
+    return chunks;
+}
+
+function setVoiceState(newState, customLabel) {
+    currentVoiceState = newState;
+    voiceDot.className = `voice-dot ${newState}`;
+    voiceStateText.textContent = customLabel || (
+        newState === VoiceState.LISTENING ? "Listening for English speech..." :
+        newState === VoiceState.TRANSCRIBING ? "Transcribing speech..." :
+        newState === VoiceState.THINKING ? "Consulting handbook..." :
+        newState === VoiceState.SPEAKING ? "Assistant speaking..." : "Idle"
+    );
+
+    if (newState === VoiceState.LISTENING || newState === VoiceState.SPEAKING) {
+        voiceWave.classList.add("active");
+    } else {
+        voiceWave.classList.remove("active");
+    }
+}
+
+function downsampleAndEncodeWav(chunks, sourceSampleRate) {
+    let totalLength = 0;
+    for (const chunk of chunks) totalLength += chunk.length;
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+    }
+
+    let samples16k;
+    if (sourceSampleRate === 16000) {
+        samples16k = merged;
+    } else {
+        const ratio = sourceSampleRate / 16000;
+        const newLen = Math.round(merged.length / ratio);
+        samples16k = new Float32Array(newLen);
+        let outIdx = 0, inIdx = 0;
+        while (outIdx < newLen) {
+            const nextInIdx = Math.round((outIdx + 1) * ratio);
+            let sum = 0, count = 0;
+            for (let i = inIdx; i < nextInIdx && i < merged.length; i++) {
+                sum += merged[i];
+                count++;
+            }
+            samples16k[outIdx] = count > 0 ? (sum / count) : 0;
+            outIdx++;
+            inIdx = nextInIdx;
+        }
+    }
+
+    const buffer = new ArrayBuffer(44 + samples16k.length * 2);
+    const view = new DataView(buffer);
+    function writeStr(pos, str) {
+        for (let i = 0; i < str.length; i++) view.setUint8(pos + i, str.charCodeAt(i));
+    }
+    writeStr(0, "RIFF");
+    view.setUint32(4, 36 + samples16k.length * 2, true);
+    writeStr(8, "WAVE");
+    writeStr(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 16000, true);
+    view.setUint32(28, 32000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, "data");
+    view.setUint32(40, samples16k.length * 2, true);
+
+    let p = 44;
+    for (let i = 0; i < samples16k.length; i++, p += 2) {
+        const s = Math.max(-1, Math.min(1, samples16k[i]));
+        view.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+
+    return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function playAudioChunks(chunks, turnGeneration, signal) {
+    if (!chunks || chunks.length === 0) {
+        if (voiceActive && sessionGeneration === turnGeneration) {
+            recordedChunks = [];
+            hasSpoken = false;
+            silenceStart = null;
+            recordingStartTime = Date.now();
+            setVoiceState(VoiceState.LISTENING);
+        }
+        return;
+    }
+
+    setVoiceState(VoiceState.SPEAKING);
+
+    async function fetchChunkAudio(text) {
+        const res = await fetch("/api/voice/synthesize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+            signal: signal
+        });
+        if (!res.ok) {
+            throw new Error(`TTS synthesis HTTP error: ${res.status}`);
+        }
+        const blob = await res.blob();
+        if (!voiceActive || sessionGeneration !== turnGeneration) {
+            return null;
+        }
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        return { audio, url };
+    }
+
+    const tStartPlayback = performance.now();
+    let nextFetchPromise = null;
+    let nextIndex = 1;
+
+    try {
+        const t0 = performance.now();
+        const first = await fetchChunkAudio(chunks[0]);
+        if (!voiceActive || sessionGeneration !== turnGeneration || !first) {
+            if (first && first.url) URL.revokeObjectURL(first.url);
+            return;
+        }
+
+        const firstChunkDurationMs = performance.now() - t0;
+        console.log(`[TTS] Chunk 1/${chunks.length} ready in ${firstChunkDurationMs.toFixed(1)}ms (${chunks[0].length} chars)`);
+
+        // If there are more chunks, start fetching chunk 2 in background right away!
+        if (nextIndex < chunks.length) {
+            nextFetchPromise = fetchChunkAudio(chunks[nextIndex++]);
+        }
+
+        let currentItem = first;
+        let chunkNum = 1;
+
+        while (currentItem) {
+            if (!voiceActive || sessionGeneration !== turnGeneration) {
+                if (currentItem.url) URL.revokeObjectURL(currentItem.url);
+                return;
+            }
+
+            cleanupAudio();
+            currentAudio = currentItem.audio;
+            currentAudioUrl = currentItem.url;
+
+            if (chunkNum === 1) {
+                console.log(`[TTS] First audio started playing in ${(performance.now() - tStartPlayback).toFixed(1)}ms after answer received`);
+            }
+
+            // Play the current audio chunk to completion
+            await new Promise((resolve, reject) => {
+                currentAudio.onended = () => resolve();
+                currentAudio.onerror = (e) => reject(e);
+                currentAudio.play().catch(reject);
+            });
+
+            // Finished playing this chunk: clean it up
+            cleanupAudio();
+
+            if (!voiceActive || sessionGeneration !== turnGeneration) {
+                return;
+            }
+
+            // Advance to next chunk if available
+            if (nextFetchPromise) {
+                chunkNum++;
+                currentItem = await nextFetchPromise;
+                // Prefetch the subsequent chunk while currentItem is prepared
+                if (nextIndex < chunks.length) {
+                    nextFetchPromise = fetchChunkAudio(chunks[nextIndex++]);
+                } else {
+                    nextFetchPromise = null;
+                }
+            } else {
+                currentItem = null;
+            }
+        }
+
+        // All chunks finished playing: resume microphone listening
+        if (voiceActive && sessionGeneration === turnGeneration) {
+            recordedChunks = [];
+            hasSpoken = false;
+            silenceStart = null;
+            recordingStartTime = Date.now();
+            setVoiceState(VoiceState.LISTENING);
+        }
+
+    } catch (err) {
+        cleanupAudio();
+        if (err.name === "AbortError") {
+            return;
+        }
+        console.error("TTS playback queue error:", err);
+        if (voiceActive && sessionGeneration === turnGeneration) {
+            recordedChunks = [];
+            hasSpoken = false;
+            silenceStart = null;
+            recordingStartTime = Date.now();
+            setVoiceState(VoiceState.LISTENING);
+        }
+    }
+}
+
+async function finishSpeechTurn() {
+    if (!voiceActive || currentVoiceState !== VoiceState.LISTENING) return;
+
+    const turnGeneration = sessionGeneration;
+    if (currentAbortController) {
+        currentAbortController.abort();
+    }
+    currentAbortController = new AbortController();
+    const signal = currentAbortController.signal;
+
+    setVoiceState(VoiceState.TRANSCRIBING);
+    const wavBlob = downsampleAndEncodeWav(recordedChunks, audioContext ? audioContext.sampleRate : 16000);
+    recordedChunks = [];
+    hasSpoken = false;
+    silenceStart = null;
+
+    try {
+        const formData = new FormData();
+        formData.append("audio", wavBlob, "speech.wav");
+
+        const res = await fetch("/api/voice/transcribe", {
+            method: "POST",
+            body: formData,
+            signal: signal
+        });
+        const data = await res.json();
+
+        // Guard against session termination or new turn
+        if (!voiceActive || sessionGeneration !== turnGeneration) return;
+
+        if (!res.ok || data.error || !data.text || data.silence) {
+            setVoiceState(VoiceState.LISTENING);
+            recordingStartTime = Date.now();
+            return;
+        }
+
+        const userText = data.text.trim();
+        addMessage(userText, "user");
+
+        setVoiceState(VoiceState.THINKING);
+        const answerData = await askQuestion(userText, signal);
+
+        // Guard against session termination or new turn
+        if (!voiceActive || sessionGeneration !== turnGeneration) return;
+
+        const answerText = answerData && answerData.answer ? answerData.answer : "";
+        if (!answerText) {
+            setVoiceState(VoiceState.LISTENING);
+            recordingStartTime = Date.now();
+            return;
+        }
+
+        const chunks = splitIntoSentenceChunks(answerText);
+        await playAudioChunks(chunks, turnGeneration, signal);
+
+    } catch (err) {
+        if (err.name === "AbortError") {
+            return; // Request was cleanly cancelled by user action
+        }
+        console.error("Voice pipeline error:", err);
+        if (voiceActive && sessionGeneration === turnGeneration) {
+            setVoiceState(VoiceState.LISTENING, "Listening for English speech...");
+            recordingStartTime = Date.now();
+        }
+    }
+}
+
+async function startVoiceMode() {
+    if (voiceActive) return;
+
+    try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        });
+    } catch (err) {
+        alert("Microphone access was denied or is unavailable: " + err.message);
+        return;
+    }
+
+    voiceActive = true;
+    sessionGeneration++;
+    const currentGen = sessionGeneration;
+
+    voiceToggleBtn.classList.add("active");
+    voiceToggleBtn.setAttribute("title", "Stop Voice Mode");
+    if (voiceBtnLabel) voiceBtnLabel.textContent = "Stop Voice";
+    voiceBar.classList.remove("hidden");
+
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioContext.state === "suspended") {
+        await audioContext.resume();
+    }
+
+    const source = audioContext.createMediaStreamSource(mediaStream);
+    processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+
+    recordedChunks = [];
+    hasSpoken = false;
+    silenceStart = null;
+    recordingStartTime = Date.now();
+    setVoiceState(VoiceState.LISTENING);
+
+    processorNode.onaudioprocess = (e) => {
+        if (!voiceActive || sessionGeneration !== currentGen) return;
+
+        // CRITICAL: Ignore microphone processing unless explicitly in LISTENING state
+        // Prevents any self-transcription loop during TTS speech playback or thinking!
+        if (currentVoiceState !== VoiceState.LISTENING) return;
+
+        const inputData = e.inputBuffer.getChannelData(0);
+
+        let sum = 0;
+        for (let i = 0; i < inputData.length; i++) {
+            sum += inputData[i] * inputData[i];
+        }
+        const rms = Math.sqrt(sum / inputData.length);
+
+        if (rms > SPEECH_THRESHOLD) {
+            hasSpoken = true;
+            silenceStart = null;
+            recordedChunks.push(new Float32Array(inputData));
+        } else if (hasSpoken) {
+            // User was speaking and is now paused
+            recordedChunks.push(new Float32Array(inputData));
+            if (silenceStart === null) {
+                silenceStart = Date.now();
+            } else if (Date.now() - silenceStart > SILENCE_TIMEOUT_MS) {
+                finishSpeechTurn();
+            }
+        } else {
+            // Unbounded silence prevention: keep only small pre-speech ring buffer
+            recordedChunks.push(new Float32Array(inputData));
+            if (recordedChunks.length > PRE_SPEECH_CHUNKS_LIMIT) {
+                recordedChunks.shift();
+            }
+        }
+
+        // Safety limit: auto-finalize if speaking uninterrupted for max duration
+        if (hasSpoken && (Date.now() - recordingStartTime > MAX_RECORDING_MS)) {
+            finishSpeechTurn();
+        }
+    };
+
+    source.connect(processorNode);
+    muteGain = audioContext.createGain();
+    muteGain.gain.value = 0;
+    processorNode.connect(muteGain);
+    muteGain.connect(audioContext.destination);
+}
+
+function stopVoiceMode() {
+    voiceActive = false;
+    sessionGeneration++;
+    currentVoiceState = VoiceState.IDLE;
+
+    voiceToggleBtn.classList.remove("active");
+    voiceToggleBtn.setAttribute("title", "Toggle Voice Mode");
+    if (voiceBtnLabel) voiceBtnLabel.textContent = "Voice Mode";
+    voiceBar.classList.add("hidden");
+
+    if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+    }
+
+    cleanupAudio();
+
+    if (processorNode) {
+        processorNode.disconnect();
+        processorNode = null;
+    }
+
+    if (muteGain) {
+        muteGain.disconnect();
+        muteGain = null;
+    }
+
+    if (audioContext && audioContext.state !== "closed") {
+        audioContext.close().catch(() => {});
+        audioContext = null;
+    }
+
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => {
+            try {
+                track.stop();
+            } catch (err) {}
+        });
+        mediaStream = null;
+    }
+
+    recordedChunks = [];
+    hasSpoken = false;
+    silenceStart = null;
+}
+
+voiceToggleBtn.addEventListener("click", () => {
+    if (voiceActive) {
+        stopVoiceMode();
+    } else {
+        startVoiceMode();
+    }
+});
+
+voiceCancelBtn.addEventListener("click", stopVoiceMode);
+
 setRing(0);
 debugChunksEl.innerHTML = `<div class="debug-empty">No request yet.</div>`;
-initTTS();

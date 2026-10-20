@@ -1,37 +1,70 @@
-# macOS
-.DS_Store
-.localized
+# Environment & Secrets
+.env
+.env.local
+.env.development
+.env.production
+*.env
+!*.example
+!.env.example
+secrets.*
+*.key
+*.pem
 
-# Python virtual environments
+# Python Virtual Environments
 .venv/
 venv/
 env/
+ENV/
 
-# Python cache
+# Python Bytecode & Caches
 __pycache__/
 *.py[cod]
-
-# Editor folders
-.vscode/
-.idea/
-
-# Test / lint / type-check caches
+*$py.class
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
-# Coverage
 .coverage
 htmlcov/
 
-# Build artifacts
+# Editor & OS Files
+.DS_Store
+.localized
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build & Packaging
 build/
 dist/
 *.egg-info/
+*.zip
+*.tar.gz
 
-
-Visa & Immigration Handbook for Germany - 260807-1.pdf
-
-# Local model and vector DB artifacts
+# Local Models, Vectors & Data Caches
 models/
 qdrant_data/
+*.onnx
+*.onnx.json
+*.bin
+*.safetensors
+*.pt
+
+# Generated Audio & Temp Files
+*.wav
+*.mp3
+*.webm
+*.ogg
+temp_audio/
+*.log
+
+# Experiments, Audits & Temporary Notebooks
+audit_reports/
+hf_zerogpu/
+*.ipynb_checkpoints
+_remote_inspect/
+
+# Proprietary Raw Handbook Documents
+Visa & Immigration Handbook for Germany - 260807-1.pdf
+*.pdf

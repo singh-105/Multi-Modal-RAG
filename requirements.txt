@@ -1,34 +1,11 @@
-# ============================================================
-# Veloit Voice RAG — Python Dependencies
-# ============================================================
-
-# --- Web framework (replaces Flask) ---
-fastapi>=0.111.0
-uvicorn[standard]>=0.29.0
-python-multipart>=0.0.9        # required for UploadFile / Form in FastAPI
-jinja2>=3.1                    # templating (used by FastAPI.templates)
-
-# --- ASR ---
-faster-whisper>=1.0.3          # bundles CTranslate2 + Silero VAD
-av<14.0.0                      # PyAV >=14 dropped metadata_errors argument used by faster-whisper
-
-# --- Vector DB ---
-qdrant-client>=1.9.0
-
-# --- Embeddings ---
-sentence-transformers>=3.0.0
-
-# --- LLM ---
-transformers>=4.40.0
-accelerate>=0.27.0             # optional but recommended for model loading
-
-# --- PyTorch (choose ONE block based on your hardware) ---
-# Apple Silicon / CPU:
+flask>=3.0.0
 torch>=2.2.0
-
-# CUDA 12.x (uncomment and comment out the line above):
-# torch>=2.2.0+cu121  --index-url https://download.pytorch.org/whl/cu121
-
-# --- Audio conversion fallback (optional, only if browser sends non-webm) ---
-# pydub>=0.25.1
-# ffmpeg-python>=0.2.0
+transformers>=4.40.0
+sentence-transformers>=3.0.0
+qdrant-client>=1.9.0
+accelerate>=0.30.0
+piper-tts>=1.2.0
+onnxruntime>=1.16.0
+huggingface-hub>=0.23.0
+numpy>=1.24.0
+pypdf>=4.0.0
