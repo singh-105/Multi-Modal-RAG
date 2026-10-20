@@ -6,23 +6,6 @@ The assistant allows international applicants, professional drivers, and skilled
 
 ---
 
-## 🌟 Key Features
-
-- **Continuous Voice & Text Modes:** Speak naturally into your microphone or type questions into the dark-themed web chat interface.
-- **Whisper Speech-to-Text:** Accurate English speech recognition using `openai/whisper-base.en` with Web Audio API silence detection.
-- **Multilingual E5 Vector Retrieval:** Semantic search using `intfloat/multilingual-e5-base` dense embeddings stored in an embedded Qdrant database.
-- **Grounded Language Model Generation:** Context-constrained generation using `utter-project/EuroLLM-1.7B-Instruct`.
-- **Piper Neural TTS:** Low-latency spoken answers via `rhasspy/piper-voices` (`en_US-lessac-medium`) running locally on CPU in sentence chunks.
-- **Factual Grounding & Hallucination Prevention (`grounding.py`):**
-  - Hybrid dense + lexical IDF scoring ($S_{\text{dense}} + 0.05 \times S_{\text{lexical\_idf}}$).
-  - Section diversity protection (maximum 2 chunks per section).
-  - Out-of-scope query rejection (refuses unrelated sports, trivia, or general chit-chat).
-  - Numeric claim verification (detects and suppresses ungrounded pricing hallucinations).
-  - Visa guarantee negation (strictly enforces that visa approvals cannot be guaranteed and are determined solely by German authorities).
-- **Integrated Microphone Composer:** Compact microphone button positioned beside the Send button with real-time status indicators (`Ready`, `Listening`, `Thinking`, `Speaking`).
-
----
-
 ## 🛠️ Technology Stack
 
 | Layer | Component | Description |
@@ -273,36 +256,3 @@ python test_search.py
 python -m unittest test_grounding_suite.py test_voice_agent.py test_search.py
 ```
 
----
-
-## 🔧 Troubleshooting
-
-### 1. Storage Folder `qdrant_data` Already Accessed
-- **Error:** `RuntimeError: Storage folder qdrant_data is already accessed by another instance of Qdrant client.`
-- **Cause:** Qdrant local embedded mode locks `qdrant_data/.lock` to prevent multi-process corruption.
-- **Fix:** Ensure only one instance of `python app.py` is running. Stop any orphaned background Python processes via Task Manager or PowerShell (`Stop-Process -Name python -Force`).
-
-### 2. Audio Not Playing in Browser
-- **Cause:** Modern browsers (Chrome, Edge, Safari) block unprompted autoplay until the user interacts with the page.
-- **Fix:** Click anywhere on the webpage or press the Voice Mode button before audio playback begins.
-
-### 3. Piper Voice Model Download
-- **Note:** On first startup, `hf_hub_download` retrieves `en_US-lessac-medium.onnx` (~30 MB) and its config JSON from Hugging Face Hub (`rhasspy/piper-voices`) into `models/`. Ensure an active internet connection on the initial run.
-
-### 4. CUDA Out of Memory (OOM)
-- **Fix:** If running on a GPU with limited VRAM (< 6 GB), set `DEVICE=cpu` in your `.env` file to run inference on system RAM in `float32` mode.
-
----
-
-## ⚠️ Current Limitations
-
-- **Language Scope:** The assistant is currently optimized for English-only voice and text conversation.
-- **Domain Scope:** Grounded exclusively in the official EuroJobsCenter Germany Handbook. It deliberately rejects queries unrelated to German visas, residence permits, professional driving (Code 95), or immigration procedures.
-- **CPU vs. GPU Latency:** On CPU-only hardware, LLM text generation takes ~2–5 seconds, whereas on an NVIDIA GPU (e.g. T4 / RTX 3060+) generation takes < 1 second. Piper TTS sentence streaming compensates on both platforms by speaking Chunk 1 within ~500 ms while subsequent chunks synthesize in the background.
-
----
-
-## ⚖️ License & Disclaimers
-
-- **Handbook Contents:** Visa, immigration, and driver qualification procedures are governed strictly by the German Federal Employment Agency (*Bundesagentur für Arbeit*), the Federal Foreign Office (*Auswärtiges Amt*), and applicable German federal legislation.
-- **Legal Disclaimer:** Answers provided by this AI assistant are informational and based exclusively on the EuroJobsCenter handbook. Neither EuroJobsCenter nor this assistant provides legal guarantees of visa issuance.
