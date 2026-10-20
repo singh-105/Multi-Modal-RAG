@@ -2,25 +2,24 @@
 
 An English-only, policy-grounded multimodal Voice & Text Retrieval-Augmented Generation (RAG) assistant designed for the official **EuroJobsCenter Visa & Immigration Handbook for Germany**.
 
-The assistant allows international applicants, truck drivers, and professionals to query German visa regulations, EU Blue Cards, Code 95 qualifications, driver declarations, and residency procedures using natural voice conversation or text chat, with real-time audio playback and strict factual citation.
+The assistant allows international applicants, professional drivers, and skilled workers to query German visa regulations, EU Blue Cards, Code 95 qualifications, driver declarations, and residency procedures using natural voice conversation or text chat, with real-time audio playback and strict factual citation.
 
 ---
 
 ## 🌟 Key Features
 
 - **Continuous Voice & Text Modes:** Speak naturally into your microphone or type questions into the dark-themed web chat interface.
-- **Multimodal Voice Pipeline (STT → RAG → TTS):**
-  - **Speech-to-Text (STT):** High-accuracy English transcription via `openai/whisper-base.en`.
-  - **Vector Retrieval:** Semantic search using `intfloat/multilingual-e5-base` dense embeddings stored in an embedded Qdrant database.
-  - **Policy-Grounded Generation:** Concise, legally accurate response synthesis using `utter-project/EuroLLM-1.7B-Instruct`.
-  - **Neural Speech Synthesis (TTS):** Crystal-clear voice output via `rhasspy/piper-voices` (`en_US-lessac-medium`) running in low-latency sentence-chunked ONNX mode on CPU.
+- **Whisper Speech-to-Text:** Accurate English speech recognition using `openai/whisper-base.en` with Web Audio API silence detection.
+- **Multilingual E5 Vector Retrieval:** Semantic search using `intfloat/multilingual-e5-base` dense embeddings stored in an embedded Qdrant database.
+- **Grounded Language Model Generation:** Context-constrained generation using `utter-project/EuroLLM-1.7B-Instruct`.
+- **Piper Neural TTS:** Low-latency spoken answers via `rhasspy/piper-voices` (`en_US-lessac-medium`) running locally on CPU in sentence chunks.
 - **Factual Grounding & Hallucination Prevention (`grounding.py`):**
-  - **Hybrid Dense + Lexical Scoring:** Combines Cosine dense similarity with inverse document frequency ($S_{\text{dense}} + 0.05 \times S_{\text{lexical\_idf}}$).
-  - **Section Diversity Protection:** Enforces a maximum of 2 chunks per handbook section to prevent retrieval bias.
-  - **Strict Out-of-Scope Refusal:** Automatically detects and rejects unrelated general knowledge queries (sports, history, general trivia).
-  - **Numeric & Pricing Claim Verification:** Suppresses ungrounded cost, salary, and fee hallucinations (e.g. Code 95 pricing) unless explicitly verified in the text.
-  - **Visa Guarantee Negation:** Strictly rejects claims that visa approval can be guaranteed, clarifying that approval is governed solely by German diplomatic authorities under German law.
-- **Bottom Composer UI Layout:** Integrated microphone button positioned directly beside the Send button with real-time status indicators (`Ready`, `Listening`, `Thinking`, `Speaking`).
+  - Hybrid dense + lexical IDF scoring ($S_{\text{dense}} + 0.05 \times S_{\text{lexical\_idf}}$).
+  - Section diversity protection (maximum 2 chunks per section).
+  - Out-of-scope query rejection (refuses unrelated sports, trivia, or general chit-chat).
+  - Numeric claim verification (detects and suppresses ungrounded pricing hallucinations).
+  - Visa guarantee negation (strictly enforces that visa approvals cannot be guaranteed and are determined solely by German authorities).
+- **Integrated Microphone Composer:** Compact microphone button positioned beside the Send button with real-time status indicators (`Ready`, `Listening`, `Thinking`, `Speaking`).
 
 ---
 
@@ -236,6 +235,14 @@ http://127.0.0.1:7860
 
 ---
 
+## 🎧 Audio Dependencies & Models (Whisper, Piper, FFmpeg)
+
+- **Whisper STT (`openai/whisper-base.en`):** Automatically downloaded via Hugging Face Transformers into `models/`. Audio is recorded directly via Web Audio API at 16,000 Hz mono PCM WAV format.
+- **Piper Neural TTS (`rhasspy/piper-voices`):** `en_US-lessac-medium.onnx` and its configuration JSON are downloaded automatically on first startup into `models/`. Runs via ONNX Runtime on CPU for fast sentence chunk synthesis.
+- **FFmpeg:** Modern browsers send standard PCM WAV data directly to the `/api/voice/transcribe` endpoint, so FFmpeg is not strictly required for browser audio. However, having FFmpeg installed in your system PATH is recommended if processing external compressed media formats.
+
+---
+
 ## 🧪 Running the Verification Test Suites
 
 The project includes 24 automated unit and integration tests verifying retrieval, factual grounding, and voice endpoints.
@@ -287,8 +294,15 @@ python -m unittest test_grounding_suite.py test_voice_agent.py test_search.py
 
 ---
 
+## ⚠️ Current Limitations
+
+- **Language Scope:** The assistant is currently optimized for English-only voice and text conversation.
+- **Domain Scope:** Grounded exclusively in the official EuroJobsCenter Germany Handbook. It deliberately rejects queries unrelated to German visas, residence permits, professional driving (Code 95), or immigration procedures.
+- **CPU vs. GPU Latency:** On CPU-only hardware, LLM text generation takes ~2–5 seconds, whereas on an NVIDIA GPU (e.g. T4 / RTX 3060+) generation takes < 1 second. Piper TTS sentence streaming compensates on both platforms by speaking Chunk 1 within ~500 ms while subsequent chunks synthesize in the background.
+
+---
+
 ## ⚖️ License & Disclaimers
 
 - **Handbook Contents:** Visa, immigration, and driver qualification procedures are governed strictly by the German Federal Employment Agency (*Bundesagentur für Arbeit*), the Federal Foreign Office (*Auswärtiges Amt*), and applicable German federal legislation.
 - **Legal Disclaimer:** Answers provided by this AI assistant are informational and based exclusively on the EuroJobsCenter handbook. Neither EuroJobsCenter nor this assistant provides legal guarantees of visa issuance.
-
