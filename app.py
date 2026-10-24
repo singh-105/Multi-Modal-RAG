@@ -550,8 +550,8 @@ def voice_status():
 
 if __name__ == "__main__":
     flask_debug = os.environ.get("FLASK_DEBUG", "false").lower() in ("true", "1")
-    host = os.environ.get("FLASK_HOST", "127.0.0.1")
-    port = int(os.environ.get("FLASK_PORT", "8000"))
+    host = os.environ.get("FLASK_HOST", os.environ.get("HOST", "127.0.0.1"))
+    port = int(os.environ.get("FLASK_PORT", os.environ.get("PORT", "7860")))
 
     if flask_debug:
         print("[WARNING] Running in DEBUG mode. Do not expose this server to public tunnels or untrusted networks.")
